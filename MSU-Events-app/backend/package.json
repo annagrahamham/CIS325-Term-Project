@@ -1,0 +1,9 @@
+{
+  "name": "msu-events-backend",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "node --watch ../src/Backend/express.js",
+    "start": "node ../src/Backend/express.js"
+  }
+}

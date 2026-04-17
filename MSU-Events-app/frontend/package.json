@@ -1,0 +1,10 @@
+{
+  "name": "msu-events-frontend",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "cd .. && npm run dev:frontend",
+    "build": "cd .. && npm run build",
+    "preview": "cd .. && npm run preview"
+  }
+}
