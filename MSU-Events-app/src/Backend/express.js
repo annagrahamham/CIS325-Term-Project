@@ -235,6 +235,15 @@ app.get('/api/health', (req, res) => {
     if (!firstName || !lastName || !email || !password || !MNumberID) {
         return res.status(400).json({ error: 'First name, last name, email, MNumberID, role, and password are required.' });
     }
+    const normalizedMNumber = String(MNumberID).trim().toUpperCase();
+    if (!/^M\d{8}$/.test(normalizedMNumber)) {
+        return res.status(400).json({ error: 'M Number must use format M######## (example: M12345678).' });
+    }
+    const numericUserId = Number.parseInt(normalizedMNumber.slice(1), 10);
+    if (!Number.isInteger(numericUserId)) {
+        return res.status(400).json({ error: 'Invalid M Number. Please re-enter and try again.' });
+    }
+
     db.get('SELECT UserID_PK FROM Users WHERE Email = ?', [email], (checkErr, existing) => {
         if (checkErr) return res.status(500).json({ error: checkErr.message });
         if (existing) return res.status(409).json({ error: 'Email already in use.' });
@@ -242,9 +251,22 @@ app.get('/api/health', (req, res) => {
         db.run(
             `INSERT INTO Users (UserID_PK, FirstName, LastName, Email, PhoneNumber, Password, Role, Major)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-            [MNumberID, firstName, lastName, email, phone || null, password, role || 'Student', major || null],
+            [numericUserId, firstName, lastName, email, phone || null, password, role || 'Student', major || null],
             function (insertErr) {
-                if (insertErr) return res.status(500).json({ error: insertErr.message });
+                if (insertErr) {
+                    if (insertErr.code === 'SQLITE_MISMATCH') {
+                        return res.status(400).json({ error: 'Your M Number could not be processed. Please use format M########.' });
+                    }
+                    if (insertErr.code === 'SQLITE_CONSTRAINT') {
+                        if (insertErr.message?.includes('Users.Email')) {
+                            return res.status(409).json({ error: 'Email already in use.' });
+                        }
+                        if (insertErr.message?.includes('Users.UserID_PK')) {
+                            return res.status(409).json({ error: 'That M Number is already registered.' });
+                        }
+                    }
+                    return res.status(500).json({ error: 'Unable to create account right now. Please try again.' });
+                }
                 return res.status(201).json({ message: 'User created successfully.' });
             }
         )})}); 

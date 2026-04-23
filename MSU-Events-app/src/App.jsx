@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useMemo, useState } from 'react';
+import { Navigate, Route, Routes } from 'react-router-dom';
 import "./styles.css";
 import Login from "./Frontend/Login";
 import Registration from "./Frontend/Registration";
@@ -12,30 +13,26 @@ function App() {
 
 });
 
-const [screen, setScreen] = useState('login');
+  const isLoggedIn = useMemo(() => Boolean(user?.id), [user]);
 
-function handleLogout() {
-  localStorage.removeItem('user');
-  setUser(null);
-  setScreen('login');
-}
+  function handleLogin(userData) {
+    localStorage.setItem('user', JSON.stringify(userData));
+    setUser(userData);
+  }
 
-//Dashboard component when logged in
-if (user) {return <Dashboard user={user} onLogout={handleLogout} />;}
+  function handleLogout() {
+    localStorage.removeItem('user');
+    setUser(null);
+  }
 
-//Otherwise show login or registration
-if (screen === 'login') {
-    return (
-      <Login
-        onLoginSuccess={setUser}
-        onRegister={() => setScreen('register')}/>
-);
-} 
-
-return (
-    <Registration
-      onRegisterSuccess={() => setScreen('login')}
-      onGoToLogin={() => setScreen('login')}/>
+  return (
+    <Routes>
+      <Route path="/login" element={isLoggedIn ? <Navigate to="/dashboard/calendar" replace /> : <Login onLoginSuccess={handleLogin} />} />
+      <Route path="/register" element={isLoggedIn ? <Navigate to="/dashboard/calendar" replace /> : <Registration />} />
+      <Route path="/dashboard/:tab" element={isLoggedIn ? <Dashboard user={user} onLogout={handleLogout} /> : <Navigate to="/login" replace />} />
+      <Route path="/" element={<Navigate to={isLoggedIn ? '/dashboard/calendar' : '/login'} replace />} />
+      <Route path="*" element={<Navigate to={isLoggedIn ? '/dashboard/calendar' : '/login'} replace />} />
+    </Routes>
   );
 }
 

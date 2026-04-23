@@ -1,4 +1,7 @@
 import { useEffect, useState } from "react";
+import { NavLink, Navigate, useNavigate, useParams } from 'react-router-dom';
+import FormField from '../components/FormField';
+import { apiRequest } from '../lib/api';
 import "../styles.css";
 
 // converts date to a string
@@ -15,9 +18,11 @@ function formatTime(value) {
 function formatSelectedDate(dayKey) { return new Date(`${dayKey}T00:00:00`).toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" }); }
 
 function Dashboard({ user, onLogout }) {
+  const navigate = useNavigate();
+  const { tab } = useParams();
+  const activeTab = tab === 'organizations' ? 'organizations' : 'calendar';
   const now = new Date();
   const userId = user?.id || null;
-  const [activeTab, setActiveTab] = useState("calendar");
   const [monthCursor, setMonthCursor] = useState(new Date(now.getFullYear(), now.getMonth(), 1));
   const [events, setEvents] = useState([]);
   const [organizations, setOrganizations] = useState([]);
@@ -26,15 +31,19 @@ function Dashboard({ user, onLogout }) {
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [orgErrors, setOrgErrors] = useState({});
+  const [eventErrors, setEventErrors] = useState({});
   const [orgForm, setOrgForm] = useState({ OrganizationName: "", Description: "", ContactEmail: "", ContactPhone: "" });
   const [eventForm, setEventForm] = useState({ OrganizationID_FK: "", EventName: "", EventType: "", Description: "", Location: "", StartTime: "", EndTime: "" });
+
+  if (tab && tab !== 'calendar' && tab !== 'organizations') {
+    return <Navigate to="/dashboard/calendar" replace />;
+  }
 
   //loads all events so the calendar can display them
   async function loadEvents() {
     try {
-      const res = await fetch("http://localhost:3000/api/events");
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Could not load events");
+      const data = await apiRequest('/events');
       setEvents(Array.isArray(data) ? data : []);
       setError("");
     } catch (err) {
@@ -46,11 +55,9 @@ function Dashboard({ user, onLogout }) {
   async function fetchFavorites() {
     if (!userId) return;
     try {
-      const res = await fetch(`http://localhost:3000/api/users/${userId}/favorites`);
-      const data = await res.json();
-      if (!res.ok) return;
+      const data = await apiRequest(`/users/${userId}/favorites`);
       setFavoriteIds(data.map((item) => item.EventID_PK));
-    } catch {
+    } catch (err) {
       setError("Could not load favorites");
     }
   }
@@ -58,9 +65,7 @@ function Dashboard({ user, onLogout }) {
   //Loads organizations for event creation
   async function loadOrganizations() {
     try {
-      const res = await fetch("http://localhost:3000/api/organizations");
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Could not load organizations");
+      const data = await apiRequest('/organizations');
       setOrganizations(Array.isArray(data) ? data : []);
     } catch (err) {
       setError(err.message || "Could not load organizations");
@@ -112,70 +117,125 @@ function Dashboard({ user, onLogout }) {
   async function toggleFavorite(eventId) {
     if (!userId) return;
     const isFavorite = favoriteIds.includes(eventId);
-    const url = isFavorite
-      ? `http://localhost:3000/api/events/${eventId}/favorite/${userId}`
-      : `http://localhost:3000/api/events/${eventId}/favorite`;
-    const options = isFavorite
-      ? { method: "DELETE" }
-      : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId }) };
-    const res = await fetch(url, options);
-    if (!res.ok) {
+    try {
+      await apiRequest(
+        isFavorite ? `/events/${eventId}/favorite/${userId}` : `/events/${eventId}/favorite`,
+        isFavorite
+          ? { method: 'DELETE' }
+          : { method: 'POST', body: JSON.stringify({ userId }) }
+      );
+      await fetchFavorites();
+    } catch {
       setError("Could not update favorites.");
-      return;
     }
+  }
 
-    await fetchFavorites();
+  function validateOrganizationForm() {
+    const nextErrors = {};
+    const hasEmail = orgForm.ContactEmail.trim();
+    const hasPhone = orgForm.ContactPhone.trim();
+
+    if (!orgForm.OrganizationName.trim()) nextErrors.OrganizationName = 'Organization name is required.';
+    if (hasEmail && !orgForm.ContactEmail.trim().includes('@')) nextErrors.ContactEmail = 'Enter a valid email.';
+    if (hasPhone && !/^\d{10}$/.test(orgForm.ContactPhone.trim())) nextErrors.ContactPhone = 'Phone must be 10 digits.';
+
+    setOrgErrors(nextErrors);
+    return Object.keys(nextErrors).length === 0;
+  }
+
+  function validateEventForm() {
+    const nextErrors = {};
+    const start = new Date(eventForm.StartTime);
+    const end = new Date(eventForm.EndTime);
+
+    if (!eventForm.EventName.trim()) nextErrors.EventName = 'Event name is required.';
+    if (!eventForm.Location.trim()) nextErrors.Location = 'Location is required.';
+    if (!eventForm.StartTime) nextErrors.StartTime = 'Start time is required.';
+    if (!eventForm.EndTime) nextErrors.EndTime = 'End time is required.';
+    if (eventForm.StartTime && eventForm.EndTime && start >= end) nextErrors.EndTime = 'End time must be after start time.';
+
+    setEventErrors(nextErrors);
+    return Object.keys(nextErrors).length === 0;
   }
 
   //creates a new organization then reloads organizations for the dropdown
   async function createOrganization(e) {
     e.preventDefault();
-    const res = await fetch("http://localhost:3000/api/organizations", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(orgForm)
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      setError(data.error || "Could not create organization");
+    if (!validateOrganizationForm()) {
+      setError('Please correct organization form errors.');
       return;
     }
-    setMessage("Organization created.");
-    setError("");
-    setOrgForm({ OrganizationName: "", Description: "", ContactEmail: "", ContactPhone: "" });
-    await loadOrganizations();
+
+    try {
+      await apiRequest('/organizations', {
+        method: 'POST',
+        body: JSON.stringify({
+          ...orgForm,
+          OrganizationName: orgForm.OrganizationName.trim(),
+          Description: orgForm.Description.trim(),
+          ContactEmail: orgForm.ContactEmail.trim(),
+          ContactPhone: orgForm.ContactPhone.trim()
+        })
+      });
+      setMessage("Organization created.");
+      setError("");
+      setOrgErrors({});
+      setOrgForm({ OrganizationName: "", Description: "", ContactEmail: "", ContactPhone: "" });
+      await loadOrganizations();
+    } catch (err) {
+      setError(err.message || 'Could not create organization');
+    }
   }
 
   //creates a new event then reloads events
   async function createEvent(e) {
     e.preventDefault();
-    const payload = { ...eventForm, OrganizationID_FK: eventForm.OrganizationID_FK || null };
-    const res = await fetch("http://localhost:3000/api/events", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      setError(data.error || "Could not create event");
+    if (!validateEventForm()) {
+      setError('Please correct event form errors.');
       return;
     }
-    setMessage("Event created.");
-    setError("");
-    setEventForm({ OrganizationID_FK: "", EventName: "", EventType: "", Description: "", Location: "", StartTime: "", EndTime: "" });
-    await loadEvents();
+
+    try {
+      const payload = {
+        ...eventForm,
+        OrganizationID_FK: eventForm.OrganizationID_FK || null,
+        EventName: eventForm.EventName.trim(),
+        EventType: eventForm.EventType.trim(),
+        Description: eventForm.Description.trim(),
+        Location: eventForm.Location.trim()
+      };
+      await apiRequest('/events', {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+      setMessage("Event created.");
+      setError("");
+      setEventErrors({});
+      setEventForm({ OrganizationID_FK: "", EventName: "", EventType: "", Description: "", Location: "", StartTime: "", EndTime: "" });
+      await loadEvents();
+    } catch (err) {
+      setError(err.message || 'Could not create event');
+    }
   }
 
   return (
     <div className="dashboard dashboard-calendar">
       <div className="dashboard-topbar">
         <p className="dashboard-user">Signed in as {user ? user.email : ""}</p>
-        <button type="button" onClick={onLogout}>Logout</button>
+        <button
+          type="button"
+          onClick={() => {
+            onLogout();
+            navigate('/login');
+          }}
+        >
+          Logout
+        </button>
       </div>
 
       <div className="dashboard-tabs">
-        <button type="button" onClick={() => setActiveTab("calendar")}>Calendar</button>
-        <button type="button" onClick={() => setActiveTab("organizations")}>Organizations</button>
+        <NavLink to="/dashboard/calendar" className={({ isActive }) => `tab-link ${isActive ? 'active' : ''}`}>Calendar</NavLink>
+        <NavLink to="/dashboard/organizations" className={({ isActive }) => `tab-link ${isActive ? 'active' : ''}`}>Organizations</NavLink>
       </div>
 
       {message && <p className="form-message success">{message}</p>}
@@ -229,17 +289,10 @@ function Dashboard({ user, onLogout }) {
           <section className="organizer-panel">
             <h3>Create Organization</h3>
             <form className="organizer-form" onSubmit={createOrganization}>
-              <label htmlFor="orgName">Organization Name</label>
-              <input id="orgName" value={orgForm.OrganizationName} onChange={(e) => setOrgForm({ ...orgForm, OrganizationName: e.target.value })} required />
-
-              <label htmlFor="orgDescription">Description</label>
-              <input id="orgDescription" value={orgForm.Description} onChange={(e) => setOrgForm({ ...orgForm, Description: e.target.value })} />
-
-              <label htmlFor="orgEmail">Contact Email</label>
-              <input id="orgEmail" value={orgForm.ContactEmail} onChange={(e) => setOrgForm({ ...orgForm, ContactEmail: e.target.value })} />
-
-              <label htmlFor="orgPhone">Contact Phone</label>
-              <input id="orgPhone" value={orgForm.ContactPhone} onChange={(e) => setOrgForm({ ...orgForm, ContactPhone: e.target.value })} />
+              <FormField id="orgName" label="Organization Name" value={orgForm.OrganizationName} onChange={(e) => setOrgForm({ ...orgForm, OrganizationName: e.target.value })} required error={orgErrors.OrganizationName} />
+              <FormField id="orgDescription" label="Description" value={orgForm.Description} onChange={(e) => setOrgForm({ ...orgForm, Description: e.target.value })} />
+              <FormField id="orgEmail" type="email" label="Contact Email" value={orgForm.ContactEmail} onChange={(e) => setOrgForm({ ...orgForm, ContactEmail: e.target.value })} error={orgErrors.ContactEmail} />
+              <FormField id="orgPhone" type="tel" label="Contact Phone" value={orgForm.ContactPhone} onChange={(e) => setOrgForm({ ...orgForm, ContactPhone: e.target.value.replace(/\D/g, '').slice(0, 10) })} error={orgErrors.ContactPhone} />
 
               <button type="submit">Create Organization</button>
             </form>
@@ -248,33 +301,23 @@ function Dashboard({ user, onLogout }) {
           <section className="organizer-panel">
             <h3>Create Event</h3>
             <form className="organizer-form" onSubmit={createEvent}>
-              <label htmlFor="eventOrg">Organization</label>
-              <select id="eventOrg" value={eventForm.OrganizationID_FK} onChange={(e) => setEventForm({ ...eventForm, OrganizationID_FK: e.target.value })}>
-                <option value="">No organization</option>
-                {organizations.map((org) => (
-                  <option key={org.OrganizationID_PK} value={org.OrganizationID_PK}>
-                    {org.OrganizationName}
-                  </option>
-                ))}
-              </select>
+              <FormField
+                id="eventOrg"
+                label="Organization"
+                value={eventForm.OrganizationID_FK}
+                onChange={(e) => setEventForm({ ...eventForm, OrganizationID_FK: e.target.value })}
+                options={[
+                  { value: '', label: 'No organization' },
+                  ...organizations.map((org) => ({ value: String(org.OrganizationID_PK), label: org.OrganizationName }))
+                ]}
+              />
 
-              <label htmlFor="eventName">Event Name</label>
-              <input id="eventName" value={eventForm.EventName} onChange={(e) => setEventForm({ ...eventForm, EventName: e.target.value })} required />
-
-              <label htmlFor="eventType">Event Type (Club, Athletic, Workshop, etc)</label>
-              <input id="eventType" value={eventForm.EventType} onChange={(e) => setEventForm({ ...eventForm, EventType: e.target.value })} />
-
-              <label htmlFor="eventDescription">Description</label>
-              <input id="eventDescription" value={eventForm.Description} onChange={(e) => setEventForm({ ...eventForm, Description: e.target.value })} />
-
-              <label htmlFor="eventLocation">Location</label>
-              <input id="eventLocation" value={eventForm.Location} onChange={(e) => setEventForm({ ...eventForm, Location: e.target.value })} required />
-
-              <label htmlFor="eventStart">Start Time</label>
-              <input type="datetime-local" id="eventStart" value={eventForm.StartTime} onChange={(e) => setEventForm({ ...eventForm, StartTime: e.target.value })} required />
-
-              <label htmlFor="eventEnd">End Time</label>
-              <input type="datetime-local" id="eventEnd" value={eventForm.EndTime} onChange={(e) => setEventForm({ ...eventForm, EndTime: e.target.value })} required />
+              <FormField id="eventName" label="Event Name" value={eventForm.EventName} onChange={(e) => setEventForm({ ...eventForm, EventName: e.target.value })} required error={eventErrors.EventName} />
+              <FormField id="eventType" label="Event Type (Club, Athletic, Workshop, etc)" value={eventForm.EventType} onChange={(e) => setEventForm({ ...eventForm, EventType: e.target.value })} />
+              <FormField id="eventDescription" label="Description" value={eventForm.Description} onChange={(e) => setEventForm({ ...eventForm, Description: e.target.value })} />
+              <FormField id="eventLocation" label="Location" value={eventForm.Location} onChange={(e) => setEventForm({ ...eventForm, Location: e.target.value })} required error={eventErrors.Location} />
+              <FormField id="eventStart" type="datetime-local" label="Start Time" value={eventForm.StartTime} onChange={(e) => setEventForm({ ...eventForm, StartTime: e.target.value })} required error={eventErrors.StartTime} />
+              <FormField id="eventEnd" type="datetime-local" label="End Time" value={eventForm.EndTime} onChange={(e) => setEventForm({ ...eventForm, EndTime: e.target.value })} required error={eventErrors.EndTime} />
 
               <button type="submit">Create Event</button>
             </form>
