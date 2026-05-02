@@ -20,13 +20,15 @@ function formatSelectedDate(dayKey) { return new Date(`${dayKey}T00:00:00`).toLo
 function Dashboard({ user, onLogout }) {
   const navigate = useNavigate();
   const { tab } = useParams();
-  const activeTab = tab === 'organizations' ? 'organizations' : 'calendar';
+  const activeTab = tab === 'organizations' ? 'organizations' : tab === 'notifications' ? 'notifications' : 'calendar';
   const now = new Date();
   const userId = user?.id || null;
   const [monthCursor, setMonthCursor] = useState(new Date(now.getFullYear(), now.getMonth(), 1));
   const [events, setEvents] = useState([]);
   const [organizations, setOrganizations] = useState([]);
   const [favoriteIds, setFavoriteIds] = useState([]);
+  const [followedOrganizationIds, setFollowedOrganizationIds] = useState([]);
+  const [notifications, setNotifications] = useState([]);
   const [selectedDayKey, setSelectedDayKey] = useState(getDayKey(now));
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [message, setMessage] = useState("");
@@ -36,7 +38,7 @@ function Dashboard({ user, onLogout }) {
   const [orgForm, setOrgForm] = useState({ OrganizationName: "", Description: "", ContactEmail: "", ContactPhone: "" });
   const [eventForm, setEventForm] = useState({ OrganizationID_FK: "", EventName: "", EventType: "", Description: "", Location: "", StartTime: "", EndTime: "" });
 
-  if (tab && tab !== 'calendar' && tab !== 'organizations') {
+  if (tab && tab !== 'calendar' && tab !== 'organizations' && tab !== 'notifications') {
     return <Navigate to="/dashboard/calendar" replace />;
   }
 
@@ -72,10 +74,32 @@ function Dashboard({ user, onLogout }) {
     }
   }
 
+  async function fetchFollowedOrganizations() {
+    if (!userId) return;
+    try {
+      const data = await apiRequest(`/users/${userId}/follows`);
+      setFollowedOrganizationIds(data.map((item) => item.OrganizationID_PK));
+    } catch (err) {
+      setError("Could not load followed organizations");
+    }
+  }
+
+  async function loadNotifications() {
+    if (!userId) return;
+    try {
+      const data = await apiRequest(`/users/${userId}/notifications`);
+      setNotifications(Array.isArray(data) ? data : []);
+    } catch (err) {
+      setError("Could not load notifications");
+    }
+  }
+
   useEffect(() => {
     loadEvents();
     fetchFavorites();
     loadOrganizations();
+    fetchFollowedOrganizations();
+    loadNotifications();
   }, [userId]);
 
   const eventsByDay = {};
@@ -127,6 +151,22 @@ function Dashboard({ user, onLogout }) {
       await fetchFavorites();
     } catch {
       setError("Could not update favorites.");
+    }
+  }
+
+  async function toggleOrganizationFollow(organizationId) {
+    if (!userId) return;
+    const isFollowing = followedOrganizationIds.includes(organizationId);
+    try {
+      await apiRequest(
+        isFollowing ? `/organizations/${organizationId}/follow/${userId}` : `/organizations/${organizationId}/follow`,
+        isFollowing
+          ? { method: 'DELETE' }
+          : { method: 'POST', body: JSON.stringify({ userId }) }
+      );
+      await fetchFollowedOrganizations();
+    } catch {
+      setError("Could not update organization follow state.");
     }
   }
 
@@ -236,6 +276,7 @@ function Dashboard({ user, onLogout }) {
       <div className="dashboard-tabs">
         <NavLink to="/dashboard/calendar" className={({ isActive }) => `tab-link ${isActive ? 'active' : ''}`}>Calendar</NavLink>
         <NavLink to="/dashboard/organizations" className={({ isActive }) => `tab-link ${isActive ? 'active' : ''}`}>Organizations</NavLink>
+        <NavLink to="/dashboard/notifications" className={({ isActive }) => `tab-link ${isActive ? 'active' : ''}`}>Notifications</NavLink>
       </div>
 
       {message && <p className="form-message success">{message}</p>}
@@ -287,6 +328,32 @@ function Dashboard({ user, onLogout }) {
       {activeTab === "organizations" && (
         <>
           <section className="organizer-panel">
+            <h3>Browse Organizations</h3>
+            {organizations.length === 0 ? <p className="empty-state">No organizations have been created yet.</p> : (
+              <div className="organization-list">
+                {organizations.map((organization) => {
+                  const isFollowing = followedOrganizationIds.includes(organization.OrganizationID_PK);
+                  return (
+                    <article className="organization-card" key={organization.OrganizationID_PK}>
+                      <div className="organization-copy">
+                        <h4>{organization.OrganizationName}</h4>
+                        <p>{organization.Description || 'No description provided.'}</p>
+                        <p className="muted-text">
+                          {organization.ContactEmail || 'No contact email'}
+                          {organization.ContactPhone ? ` · ${organization.ContactPhone}` : ''}
+                        </p>
+                      </div>
+                      <button type="button" onClick={() => toggleOrganizationFollow(organization.OrganizationID_PK)}>
+                        {isFollowing ? 'Unfollow' : 'Follow'}
+                      </button>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
+          <section className="organizer-panel">
             <h3>Create Organization</h3>
             <form className="organizer-form" onSubmit={createOrganization}>
               <FormField id="orgName" label="Organization Name" value={orgForm.OrganizationName} onChange={(e) => setOrgForm({ ...orgForm, OrganizationName: e.target.value })} required error={orgErrors.OrganizationName} />
@@ -325,7 +392,30 @@ function Dashboard({ user, onLogout }) {
         </>
       )}
 
-      {selectedEvent && (
+      {activeTab === "notifications" && (
+        <section className="organizer-panel notifications-panel">
+          <h3>Upcoming Notifications</h3>
+          {notifications.length === 0 ? <p className="empty-state">No upcoming notifications yet.</p> : (
+            <div className="notification-list">
+              {notifications.map((notification) => (
+                <article className="notification-card" key={notification.EventID_PK}>
+                  <div>
+                    <h4>{notification.EventName}</h4>
+                    <p>{notification.OrganizationName || 'Independent event'}</p>
+                    <p className="muted-text">{new Date(notification.StartTime).toLocaleString()}</p>
+                  </div>
+                  <div className="notification-meta">
+                    <span>{notification.Location}</span>
+                    <span>{formatTime(notification.StartTime)} - {formatTime(notification.EndTime)}</span>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      {activeTab === "calendar" && selectedEvent && (
         <div className="event-details-card">
           <h3>{selectedEvent.EventName}</h3>
           {selectedEvent.OrganizationName && <p>Organization: {selectedEvent.OrganizationName}</p>}

@@ -10,7 +10,8 @@
     "start:backend": "node src/Backend/express.js",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "echo \"No tests configured\" && exit 0"
   },
   "dependencies": {
     "cors": "^2.8.6",
